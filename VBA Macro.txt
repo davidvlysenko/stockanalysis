@@ -1,0 +1,222 @@
+'Return array containing Product column index in element 1 and Price column index in element 2
+Function SkipListFunc(WsName As String) As Variant
+    
+    'Open worksheet
+    Worksheets(WsName).Activate
+    
+    
+    'Declare variables
+    Dim Header() As Variant
+    Dim SkipList(0 To 1) As Integer
+    
+    
+    'Search header for "Product" and "Price"
+    Header = Range("A1", Range("A1").End(xlToRight)).Value
+    SkipList(0) = Application.Match("Product", Header, False)
+    SkipList(1) = Application.Match("Price", Header, False)
+    
+    
+    SkipListFunc = SkipList
+
+End Function
+
+'Return everything except Product column and move Price to the end
+Function Info(row, SkipList, PriceType) As Object
+
+    'Declare variables
+    Dim cl As Integer
+    Dim Values As Object
+    Set Values = CreateObject("System.Collections.ArrayList")
+
+
+    'Iterate through all the columns
+    For cl = 1 To Cells(1, Columns.Count).End(xlToLeft).Column
+                  
+        If cl <> SkipList(0) And cl <> SkipList(1) Then
+            Values.Add Cells(row, cl).Value
+        End If
+     
+    Next cl
+    
+    
+    'Add product at the end
+    'If it's the header variable, append "Open" or "Close" before "Price"
+    If Cells(row, SkipList(0)).Value = "Product" Then
+        Values.Add PriceType & " Price"
+    Else
+        Values.Add Cells(row, SkipList(1)).Value
+    End If
+    
+    
+    'Return
+    Set Info = Values
+
+End Function
+
+'Return hashtable with "Product" as key and information as entry for close prices
+Function GetCloseDict() As Object
+    
+    'Index "Product" and "Price" columns
+    Dim SkipListClose As Variant
+    SkipListClose = SkipListFunc("close_prices")
+    
+    
+    'Declare variables
+    Dim dict As Object
+    Set dict = CreateObject("Scripting.Dictionary")
+    Dim rw As Integer
+
+    
+    'Fill Close Dictionary
+    For rw = 1 To Cells(Rows.Count, 1).End(xlUp).row
+        dict.Add Cells(rw, SkipListClose(0)).Value, Info(rw, SkipListClose, "Close").toArray
+        
+    Next rw
+    
+    
+    'Return
+    Set GetCloseDict = dict
+
+End Function
+
+'Percent change calculator
+Function PercentChange(OpenPrice, ClosePrice, AbsTrue As Boolean)
+    
+    'Header
+    If OpenPrice = "Open Price" Then
+        If AbsTrue = True Then
+            PercentChange = "Net Change"
+        Else
+            PercentChange = "Percent Change"
+        End If
+    
+    
+    'Perform calculations
+    Else
+        If AbsTrue = True Then
+            PercentChange = Abs(Round((ClosePrice - OpenPrice) / Abs(OpenPrice) * 100, 2))
+        Else
+            PercentChange = Round((ClosePrice - OpenPrice) / Abs(OpenPrice) * 100, 2)
+        End If
+            
+    End If
+
+End Function
+
+'Concatenate worksheets and perform operations on each Product
+Function RwCalc(row, SkipList As Variant, dict) As Object
+
+    'Declare variables
+    Dim RwInfo As Object
+
+
+    'Create an arraylist for all the information in Open Prices
+    Set RwInfo = Info(row, SkipList, "Open").Clone
+    RwInfo.Insert 0, Cells(row, SkipList(0)).Value
+    
+    
+    'Add the information from the Close Prices to the arraylist by using a hash search
+    For Each InfoPiece In dict(Cells(row, SkipList(0)).Value)
+        RwInfo.Add InfoPiece
+    Next InfoPiece
+    
+    
+    'Move Open Price to second to last position
+    RwInfo.Insert RwInfo.Count - 1, RwInfo(Cells(1, Columns.Count).End(xlToLeft).Column - 1)
+    RwInfo.RemoveAt Cells(1, Columns.Count).End(xlToLeft).Column - 1
+    
+    
+    'Calculate percent change
+    RwInfo.Add PercentChange(RwInfo(RwInfo.Count - 2), RwInfo(RwInfo.Count - 1), False)
+    RwInfo.Add PercentChange(RwInfo(RwInfo.Count - 3), RwInfo(RwInfo.Count - 2), True)
+    
+      
+    'Return
+    Set RwCalc = RwInfo
+
+End Function
+
+'Calculate the product with the highest net change
+Function MaxProductChange(dict) As Object
+
+    For rw = 1 To Cells(Rows.Count, 1).End(xlUp).row
+        
+        'Cross-reference and align all the information: Product, Open Info, Close Info, Open Price, Close Price, Percent Change, Net Change
+        Set ProductInfo = RwCalc(rw, SkipListFunc("open_prices"), dict)
+        
+        
+        'Set initial maximum value
+        If rw = 2 Then
+            Dim MaxProduct As Object
+            Set MaxProduct = ProductInfo.Clone
+            
+            Dim MaxValue As Double
+            MaxValue = MaxProduct(MaxProduct.Count - 1)
+            
+            
+        'If higher than the previous maximum value, replace value
+        ElseIf rw >= 3 Then
+            If ProductInfo(ProductInfo.Count - 1) > MaxValue Then
+                MaxValue = ProductInfo(ProductInfo.Count - 1)
+                Set MaxProduct = ProductInfo.Clone
+                
+            End If
+        
+        End If
+    
+    
+    Next rw
+    
+    Set MaxProductChange = MaxProduct
+
+End Function
+
+
+Sub CreateSortedList(dict)
+    
+    'Add sheet to end of workbook
+    Sheets.Add(After:=Sheets(Sheets.Count)).Name = "sorted_products"
+    
+    
+    For rw = 1 To Worksheets("open_prices").Cells(Worksheets("open_prices").Rows.Count, 1).End(xlUp).row
+        
+        'Cross-reference and align all the information: Product, Open Info, Close Info, Open Price, Close Price, Percent Change, Net Change
+        Set ProductInfo = RwCalc(rw, SkipListFunc("open_prices"), dict)
+        
+        
+        'Add row to sheet
+        Worksheets("sorted_products").Cells(rw, 1).Resize(1, ProductInfo.Count).Value = ProductInfo.toArray
+        
+        
+        'Sort based on net change
+        Worksheets("sorted_products").Cells(1, Columns.Count).End(xlToLeft).Sort _
+        key1:=Worksheets("sorted_products").Cells(1, Worksheets("sorted_products").Cells(1, Columns.Count).End(xlToLeft).Column), Order1:=xlDescending, Header:=xlYes
+    
+    Next rw
+
+
+End Sub
+
+Sub largest_mover()
+
+    Set CloseDict = GetCloseDict()
+    
+    
+    'If the list is long, then only calculate the product with the maximum net change
+    If CloseDict.Count > 200 Then
+        Set MaxChange = MaxProductChange(CloseDict)
+        MsgBox "Largest move was " & MaxChange(MaxChange.Count - 2) & "% in " & MaxChange(0)
+        
+        
+    'Otherwise, create a new sorted sheet
+    Else
+        CreateSortedList CloseDict
+        MsgBox "Largest move was " & Worksheets("sorted_products").Cells(2, Worksheets("sorted_products").Cells(1, Columns.Count).End(xlToLeft).Column - 1) & _
+        "% in " & Worksheets("sorted_products").Cells(2, 1)
+
+
+    End If
+    
+
+    
+End Sub
